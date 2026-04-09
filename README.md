@@ -1,7 +1,7 @@
 # Differential Evolution + Neural Network Surrogate for MGA Trajectory Optimization
 ### v1.0.0 — DE with MLP Pre-Screening
 
-A from-scratch implementation of **differential evolution** with a **neural network surrogate model** for interplanetary Multiple Gravity Assist (MGA) trajectory optimization. The optimizer solves Lambert's problem at each leg of a candidate trajectory, computes v∞ at each planetary encounter, and accumulates the total Δv cost including gravity-assist feasibility constraints. A multilayer perceptron is trained on accumulated fitness evaluations and used to pre-screen each generation's trial population, so only the most promising candidates trigger a full Lambert solve. Using **numpy** for the optimizer and **scikit-learn** for the surrogate, the system solves the ESA GTOP **Cassini1** problem (Earth–Venus–Venus–Earth–Jupiter–Saturn) and simpler benchmarks, with a 6-test validation suite covering DE correctness, MGA physics, and surrogate behaviour.
+A from-scratch implementation of **differential evolution** with a **neural network surrogate model** for interplanetary Multiple Gravity Assist (MGA) trajectory optimization. The optimizer solves Lambert's problem at each leg of a candidate trajectory, computes v∞ at each planetary encounter, and accumulates the total Δv cost including gravity-assist feasibility constraints. A multilayer perceptron is trained on accumulated fitness evaluations and used to pre-screen each generation's trial population, so only the most promising candidates trigger a full Lambert solve. Using **numpy** for the optimizer and **scikit-learn** for the surrogate, the system solves the ESA GTOP **Cassini1** problem (Earth–Venus–Venus–Earth–Jupiter–Saturn) and simpler benchmarks, with a 10-test validation suite covering DE correctness, MGA physics, and surrogate behaviour.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![Optimizer](https://img.shields.io/badge/Optimizer-Differential_Evolution-green)
@@ -19,7 +19,7 @@ A from-scratch implementation of **differential evolution** with a **neural netw
 - **Neural network surrogate** — scikit-learn MLP regressor with normalized inputs, fitness clipping, and rank-correlation scoring
 - **Surrogate-assisted DE** — pre-screening strategy that evaluates only the top-k predicted candidates per generation
 - **Three benchmark problems** — Earth→Mars direct (2D), Earth-Venus-Earth-Jupiter (4D), ESA GTOP Cassini1 EVVEJS (6D)
-- **Validation suite** — 6 tests covering DE convergence, Earth-Mars cross-check, Cassini1 feasibility, flyby cost sanity, and surrogate behaviour
+- **Validation suite** — 10 tests covering DE convergence, Earth-Mars cross-check, Cassini1 feasibility, flyby cost sanity, and surrogate behaviour
 
 ---
 
@@ -161,7 +161,7 @@ Let α be the angle between v∞_in and v∞_out:
 α  > δ_max :  cost = √(v₁² + v₂² − 2·v₁·v₂·cos(α − δ_max))
 ```
 
-The first case handles feasible flybys where the only cost is the magnitude mismatch that a pure unpowered flyby cannot provide. The second case computes the minimum impulse required at periapsis when the requested turn exceeds the maximum achievable rotation. This model correctly reports zero cost for geometrically feasible flybys and high cost for impossible geometries like 180° reversals.
+The first case handles feasible flybys where the only cost is the magnitude mismatch. The second case computes the minimum impulse required at periapsis when the requested turn exceeds the maximum achievable rotation. This model correctly reports zero cost for geometrically feasible flybys and high cost for impossible geometries.
 
 ### Minimum Flyby Radii
 
@@ -172,7 +172,7 @@ The first case handles feasible flybys where the only cost is the magnitude mism
 | Earth | 6,678 | surface + 300 km |
 | Mars | 3,590 | surface + 200 km |
 | Jupiter | 500,444 | 6 R_J (radiation belt avoidance) |
-| Saturn | 61,268 | surface + 1000 km |
+| Saturn | 61,268 | surface + 1,000 km |
 
 ---
 
@@ -222,55 +222,110 @@ The surrogate reports three metrics on held-out data:
 
 ### Earth → Mars Direct (2 variables)
 
-The simplest benchmark — a direct two-body transfer with no flybys. Decision vector is `[t0_MJD2000, T_days]`. Useful for fast testing and cross-validation against an independent porkchop plot reference.
+The simplest benchmark — a direct two-body transfer with no flybys. Decision vector is `[t0_MJD2000, T_days]`. Used for fast testing and cross-validation against the independent porkchop plot reference.
 
 ### Earth → Venus → Earth → Jupiter (4 variables)
 
-A three-flyby transfer that approximates a fragment of the Cassini trajectory structure. Intermediate difficulty — verifies that DE handles flyby feasibility constraints before scaling up to the full Cassini1 problem.
+A three-flyby transfer that approximates a fragment of the Cassini trajectory structure. Intermediate difficulty — verifies that DE handles flyby feasibility constraints before scaling up to Cassini1.
 
 ### Cassini1 — EVVEJS (6 variables)
 
-The ESA GTOP Cassini1 benchmark — Earth–Venus–Venus–Earth–Jupiter–Saturn. Decision vector bounds match the ESA problem definition. This implementation uses an **unpowered-MGA formulation** (no deep-space impulses within transfer legs), so the achievable minimum is higher than the reference MGA-1DSM best-known solution of ≈4.93 km/s. The problem geometry, planet sequence, and variable bounds are identical to the ESA version.
+The ESA GTOP Cassini1 benchmark — Earth–Venus–Venus–Earth–Jupiter–Saturn. Decision vector bounds match the ESA problem definition. This implementation uses an **unpowered-MGA formulation** (no deep-space impulses within transfer legs), so the achievable minimum is higher than the reference MGA-1DSM best-known solution of 4.930 km/s. The problem geometry, planet sequence, and variable bounds are identical to the ESA version.
 
 ---
 
 ## Results
 
-### Earth → Mars Direct
+### Earth → Mars Direct (5 runs × 5,000 evaluations)
 
-| Metric | Value |
-|--------|-------|
-| Optimal departure | 2026-10-30 |
-| Optimal arrival | 2027-09-06 |
+| Metric | DE | Surrogate-DE |
+|--------|-----|--------------|
+| Best Δv | 5.608 km/s | 5.608 km/s |
+| Mean Δv | 5.608 km/s | 5.608 km/s |
+| Median Δv | 5.608 km/s | 5.608 km/s |
+| Worst Δv | 5.608 km/s | 5.608 km/s |
+| Std | 0.000 | 0.000 |
+| Avg evaluations | 1,064 | 3,335 |
+| Avg time | 0.18 s | 43.62 s |
+| Reference | 5.610 km/s | — |
+
+Both optimizers find the global minimum consistently across all 5 runs, within 0.04% of the independent porkchop plot reference (5.611 km/s). The surrogate provides no benefit on this problem — DE converges in approximately 1,000 evaluations on a 2D landscape, so there is no evaluation budget to save. The surrogate warmup and retraining overhead make it 240× slower for identical solution quality.
+
+This is the expected behaviour: surrogate pre-screening is only beneficial when the real fitness function is expensive relative to surrogate inference cost, and when the search budget is the binding constraint. Neither condition holds for Earth-Mars direct.
+
+**Best mission:**
+
+| Property | Value |
+|----------|-------|
+| Departure | 2026-10-30 |
+| Arrival | 2027-09-06 |
 | Time of flight | 311 days |
 | Total Δv | 5.608 km/s |
-| Convergence | ~52 generations |
-| Real evaluations | ~1560 |
 
-This matches the independent porkchop plot minimum (5.611 km/s) to within 0.05%, confirming that the DE optimizer and MGA fitness function are correctly coupled.
+---
 
-### Surrogate-Assisted DE
+### Cassini1 — EVVEJS (5 runs × 30,000 evaluations)
 
-On the same Earth-Mars problem with a 1500-evaluation budget, surrogate-assisted DE converges to 5.648 km/s in ~1140 real evaluations. The rank correlation of the surrogate on held-out data exceeds 0.99, confirming that the MLP successfully learns the fitness landscape ordering.
+| Metric | DE | Surrogate-DE |
+|--------|-----|--------------|
+| Best Δv | 9.419 km/s | 9.422 km/s |
+| Mean Δv | 9.419 km/s | 13.641 km/s |
+| Median Δv | 9.419 km/s | 14.219 km/s |
+| Worst Δv | 9.419 km/s | 20.189 km/s |
+| Std | 0.000 | 4.001 |
+| Avg time | 27.75 s | 238.10 s |
+| Reference (MGA-1DSM) | 4.930 km/s | — |
+
+**Best mission:**
+
+| Leg | Transfer time | Arrival |
+|-----|--------------|---------|
+| Earth → Venus | 180 d | 1998-05-17 |
+| Venus → Venus | 415 d | 1999-07-06 |
+| Venus → Earth | 53 d | 1999-08-28 |
+| Earth → Jupiter | 1,057 d | 2002-07-20 |
+| Jupiter → Saturn | 4,634 d | 2015-03-28 |
+
+- **Departure:** 1997-11-18 — within 34 days of the real Cassini launch (1997-10-15), confirming correct problem geometry
+- **Duration:** 6,339 days (17.35 years)
+- **Total Δv:** 9.419 km/s
+
+#### Why the result differs from the 4.930 km/s reference
+
+Two independent reasons account for the gap:
+
+**Formulation difference.** This implementation uses unpowered MGA only — no deep-space impulses within transfer legs. The ESA GTOP best-known solution uses the MGA-1DSM formulation, which allows one deep-space impulse per leg. The search space here is strictly smaller, so the achievable minimum is higher by construction. This is a deliberate scope choice to keep the fitness function physically transparent.
+
+**Insufficient evaluation budget.** The Cassini1 landscape is highly multimodal in 6 dimensions. The literature reports that competitive MGA solutions typically require 100,000–300,000 fitness evaluations with population sizes of 100–200. At 30,000 evaluations with population 60, DE converges to a local optimum at 9.419 km/s with zero variance across all 5 runs — identical results indicate the search has stalled in one basin rather than explored the landscape. Increasing the budget to 150,000+ evaluations with a larger population is the primary path to improvement within the current formulation.
+
+#### Why the surrogate hurts on Cassini1
+
+The surrogate-assisted DE degrades performance significantly: mean Δv increases by 44.8% and standard deviation rises from 0.000 to 4.001 km/s. This is a known failure mode of surrogate-assisted optimization on highly multimodal landscapes.
+
+The MLP learns a smooth approximation of a jagged fitness surface. Pre-screening on this approximation systematically filters out candidates in unexplored basins that appear unpromising to the surrogate but are in fact paths to better optima. The result is reduced diversity and premature convergence — the opposite of the intended effect. High variance across runs (9.422 to 20.189 km/s) confirms the surrogate is actively destabilizing the search rather than guiding it.
+
+The contrast with Earth-Mars is informative: the surrogate achieves rank correlation ρ = 0.996 on the quadratic test function, confirming it can learn smooth landscapes. The failure is specific to multimodal problems at insufficient budget, where the surrogate has not seen enough of the landscape to distinguish good basins from bad ones.
+
+**Planned improvement:** an adaptive fallback that monitors surrogate rank correlation on held-out data during the run and disables pre-screening when ρ drops below a threshold, reverting to plain DE evaluation for that generation.
 
 ---
 
 ## Validation
 
-The solver passes 6 tests covering DE correctness, MGA physics, and surrogate behaviour:
+The solver passes 10 tests covering DE correctness, MGA physics, and surrogate behaviour:
 
 | Test | Description | Result |
 |------|-------------|--------|
-| DE on sphere (D=10) | Convex smooth function | ✅ best = 1.4e-08 (target <1e-04) |
-| DE on Rosenbrock (D=10) | Narrow curved valley | ✅ best = 4.4e-02 (target <1.0) |
-| DE on Ackley (D=10) | Flat with central well | ✅ best = 1.2e-04 (target <1e-02) |
-| Earth→Mars DE convergence | Cross-check against porkchop reference | ✅ best = 5.608 km/s (ref ~5.611) |
+| DE sphere (D=10) | Convex smooth function | ✅ best = 1.365e-08 (target < 1e-04) |
+| DE Rosenbrock (D=10) | Narrow curved valley | ✅ best = 4.351e-02 (target < 1.0) |
+| DE Ackley (D=10) | Flat with central well | ✅ best = 1.231e-04 (target < 1e-02) |
+| Earth→Mars convergence | Cross-check vs porkchop reference | ✅ best = 5.608 km/s (ref 5.610) |
 | Cassini1 feasibility | Random 6D points produce finite Δv | ✅ 100/100 finite |
-| Flyby zero cost | Identical v∞ in/out | ✅ cost = 0 |
+| Flyby zero cost | Identical v∞ in/out | ✅ cost = 0.000e+00 |
 | Flyby reversal cost | 180° v∞ flip | ✅ cost = 4.143 km/s |
 | Flyby small rotation | 3° turn at Jupiter | ✅ cost = 0 |
-| Surrogate rank correlation | Spearman ρ on quadratic | ✅ ρ = 0.996 |
-| Surrogate-assisted DE | End-to-end on Earth→Mars | ✅ 5.648 km/s in 1140 evals |
+| Surrogate rank correlation | Spearman ρ on quadratic | ✅ ρ = 0.996, MAE = 0.52 |
+| Surrogate-assisted DE | End-to-end on Earth→Mars | ✅ 5.608 km/s |
 
 ---
 
@@ -278,18 +333,16 @@ The solver passes 6 tests covering DE correctness, MGA physics, and surrogate be
 
 ### Optimizer Correctness
 
-Differential evolution is a stochastic global optimizer — it does not produce a provably optimal result, only a best-found-so-far. Convergence is measured by comparing multiple independent runs with different seeds and reporting best, mean, median, worst, and standard deviation. The implementation is validated on standard test functions (sphere, Rosenbrock, Ackley) where the global optimum is known, and against the independent porkchop plot reference for Earth→Mars.
+Differential evolution is a stochastic global optimizer — it produces a best-found-so-far, not a provably optimal result. Convergence is assessed by running multiple independent seeds and reporting best, mean, median, worst, and standard deviation. The implementation is validated on standard test functions where the global optimum is known, and against the independent porkchop plot reference for Earth-Mars.
 
 ### MGA Physics
 
-The fitness function uses the patched-conics approximation with an **unpowered-flyby** model. This means:
+The fitness function uses the patched-conics approximation with an unpowered-flyby model:
 
 - Each transfer leg is computed as a two-body Keplerian arc via Lambert's problem (exact to machine precision)
 - Flybys are instantaneous and preserve the hyperbolic excess magnitude
 - The turn-angle bound `sin(δ_max/2) = 1/(1 + r_p·v∞²/μ)` is physically exact for unpowered encounters
-- Deep-space impulses within a transfer leg are **not** modelled
-
-The reference ESA GTOP Cassini1 best-known solution (≈4.93 km/s) uses the MGA-1DSM formulation, which allows one deep-space impulse per leg. Results from this implementation will be higher than the reference because the search space is strictly smaller.
+- Deep-space impulses within a transfer leg are not modelled
 
 ### What Is Not Modelled
 
@@ -298,8 +351,8 @@ The reference ESA GTOP Cassini1 best-known solution (≈4.93 km/s) uses the MGA-
 | Unpowered MGA only | No deep-space impulses; results higher than MGA-1DSM reference |
 | Patched conics | No N-body perturbations during transfer |
 | No planetary arrival spirals | Δv reported is hyperbolic excess, not launch vehicle Δv |
-| Prograde transfers only | Retrograde available via Lambert API but not exposed in MGA fitness |
-| No Mercury arrival problems | Planet sequence must be chosen from Mercury-Saturn |
+| Prograde transfers only | Retrograde available via Lambert API but not in MGA fitness |
+| Fixed surrogate hyperparameters | screen_fraction and retrain_every not adapted to landscape |
 
 ---
 
@@ -311,49 +364,56 @@ The reference ESA GTOP Cassini1 best-known solution (≈4.93 km/s) uses the MGA-
 | `testfuncs.py` | Standard test functions — sphere, Rosenbrock, Rastrigin, Ackley |
 | `lambert.py` | Izzo's Lambert solver — called by every MGA fitness evaluation |
 | `ephemeris.py` | Analytical planetary ephemeris from JPL Keplerian elements |
-| `mga.py` | MGA fitness functions, flyby cost model, problem definitions (Earth-Mars, EVEJ, Cassini1) |
+| `mga.py` | MGA fitness functions, flyby cost model, problem definitions |
 | `surrogate.py` | MLP surrogate with input normalization and training reservoir |
 | `de_surrogate.py` | Surrogate-assisted DE with pre-screening strategy |
 | `benchmark.py` | Benchmark harness comparing plain DE against surrogate-assisted DE |
-| `validate.py` | 6-test validation suite |
+| `validate.py` | 10-test validation suite |
 | `main.py` | CLI entry point with problem selection and budget options |
 
 ---
 
 ## Performance
 
-| Problem | Dimensions | Typical Budget | Runtime per Run |
-|---------|-----------|---------------|-----------------|
-| Earth → Mars | 2 | 3,000 evals | ~30 s |
-| EVEJ | 4 | 15,000 evals | ~2 min |
-| Cassini1 | 6 | 30,000 evals | ~5 min |
+| Problem | Dimensions | Budget | DE runtime | Surrogate-DE runtime |
+|---------|-----------|--------|------------|---------------------|
+| Earth → Mars | 2 | 5,000 | 0.18 s | 43.62 s |
+| EVEJ | 4 | 15,000 | ~2 min | ~8 min |
+| Cassini1 | 6 | 30,000 | 27.75 s | 238.10 s |
 
-Measured on a single CPU core. The computation is embarrassingly parallel but parallelisation is not implemented — each Lambert solve is already fast enough that the overhead of thread dispatch would not pay off at this scale.
+Measured on a single CPU core. The computation is embarrassingly parallel but parallelisation is not implemented — each Lambert solve is fast enough that thread dispatch overhead does not pay off at this scale.
 
 ---
 
 ## Known Limitations
 
-- **Unpowered MGA only.** Deep-space maneuvers within transfer legs are not modelled, so Cassini1 results will not match the MGA-1DSM reference of 4.93 km/s. This is a deliberate scope choice to keep the fitness function simple and physically transparent.
-- **Default DE parameters only.** Self-adaptive variants (jDE, SHADE, L-SHADE) are not implemented. F and CR are fixed at 0.7 and 0.9.
-- **No launch C3 filtering.** All departure Δv values are reported regardless of realistic launch vehicle capability.
+- **Unpowered MGA only.** Deep-space maneuvers within transfer legs are not modelled, so Cassini1 results will not match the MGA-1DSM reference of 4.930 km/s. This is a deliberate scope choice.
+- **Insufficient budget for Cassini1.** Competitive solutions require 100,000–300,000 evaluations. At 30,000 the optimizer stalls in a local basin at 9.419 km/s.
+- **Surrogate degrades on multimodal problems.** Pre-screening is beneficial only when the landscape is smooth enough for the MLP to learn useful fitness ordering. On Cassini1 at this budget, the surrogate actively harms convergence. An adaptive fallback based on held-out rank correlation is the planned fix.
+- **Default DE parameters only.** Self-adaptive variants (jDE, SHADE, L-SHADE) are not implemented. F and CR are fixed.
+- **No launch C3 filtering.** All departure Δv values are reported regardless of launch vehicle capability.
 - **Single-objective.** The optimizer minimizes total Δv only. Pareto frontiers over Δv vs flight time are not supported.
-- **Surrogate is optional but not adaptive.** `screen_fraction` and `retrain_every` are fixed hyperparameters, not learned from the observed landscape.
+
+---
+
+## Future Work
+
+- Increase evaluation budget to 150,000+ for Cassini1 with population 100–200
+- Implement MGA-1DSM formulation (one deep-space impulse per leg) to match ESA reference
+- Adaptive surrogate fallback: disable pre-screening when held-out rank correlation drops below threshold
+- Self-adaptive DE variants (jDE, SHADE) for improved convergence on high-dimensional problems
+- Pareto frontier over total Δv vs flight time
+- C++ port with OpenCL parallelization for GPU-accelerated population evaluation — planned as part of the Solar Mission Planner
 
 ---
 
 ## References
 
 1. Storn, R. and Price, K. (1997). *Differential Evolution — A Simple and Efficient Heuristic for Global Optimization over Continuous Spaces.* Journal of Global Optimization, 11(4), 341-359.
-
 2. Jin, Y. (2011). *Surrogate-assisted evolutionary computation: Recent advances and future challenges.* Swarm and Evolutionary Computation, 1(2), 61-70.
-
 3. Vasile, M. and De Pascale, P. (2006). *Preliminary Design of Multiple Gravity-Assist Trajectories.* Journal of Spacecraft and Rockets, 43(4), 794-805.
-
 4. Izzo, D. (2015). *Revisiting Lambert's problem.* Celestial Mechanics and Dynamical Astronomy, 121(1), 1-15.
-
 5. Zuo, M. et al. (2020). *A case learning-based differential evolution algorithm for global optimization of interplanetary trajectory design.* Applied Soft Computing, 94, 106451.
-
 6. ESA GTOP database: https://www.esa.int/gsp/ACT/projects/gtop/
 
 ---
