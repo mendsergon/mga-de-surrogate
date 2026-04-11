@@ -19,7 +19,7 @@ A from-scratch implementation of **differential evolution** with a **neural netw
 - **Neural network surrogate** — scikit-learn MLP regressor with normalized inputs, fitness clipping, and rank-correlation scoring
 - **Surrogate-assisted DE** — pre-screening strategy that evaluates only the top-k predicted candidates per generation
 - **Three benchmark problems** — Earth→Mars direct (2D), Earth-Venus-Earth-Jupiter (4D), ESA GTOP Cassini1 EVVEJS (6D)
-- **Validation suite** — 10 tests covering DE convergence, Earth-Mars cross-check, Cassini1 feasibility, flyby cost sanity, and surrogate behaviour
+- **Validation suite** — 10 tests covering DE correctness, MGA physics, and surrogate behaviour
 
 ---
 
@@ -53,7 +53,7 @@ No astrodynamics libraries are used. No astropy, no poliastro, no pykep, no pygm
 python main.py                              # Earth→Mars (fast default)
 python main.py --problem evej               # Earth-Venus-Earth-Jupiter
 python main.py --problem cassini1           # Cassini1 EVVEJS (slow)
-python main.py --runs 10 --budget 30000     # custom settings
+python main.py --runs 10 --budget 150000    # recommended Cassini1 settings
 python main.py --de-only                    # skip surrogate for baseline
 python main.py --surrogate-only             # skip plain DE
 python main.py --validate                   # run validation suite
@@ -242,16 +242,12 @@ The ESA GTOP Cassini1 benchmark — Earth–Venus–Venus–Earth–Jupiter–Sa
 |--------|-----|--------------|
 | Best Δv | 5.608 km/s | 5.608 km/s |
 | Mean Δv | 5.608 km/s | 5.608 km/s |
-| Median Δv | 5.608 km/s | 5.608 km/s |
-| Worst Δv | 5.608 km/s | 5.608 km/s |
 | Std | 0.000 | 0.000 |
 | Avg evaluations | 1,064 | 3,335 |
 | Avg time | 0.18 s | 43.62 s |
 | Reference | 5.610 km/s | — |
 
-Both optimizers find the global minimum consistently across all 5 runs, within 0.04% of the independent porkchop plot reference (5.611 km/s). The surrogate provides no benefit on this problem — DE converges in approximately 1,000 evaluations on a 2D landscape, so there is no evaluation budget to save. The surrogate warmup and retraining overhead make it 240× slower for identical solution quality.
-
-This is the expected behaviour: surrogate pre-screening is only beneficial when the real fitness function is expensive relative to surrogate inference cost, and when the search budget is the binding constraint. Neither condition holds for Earth-Mars direct.
+Both optimizers find the global minimum consistently across all 5 runs, within 0.04% of the independent porkchop plot reference (5.611 km/s). The surrogate provides no benefit on this 2D problem — DE converges in approximately 1,000 evaluations, leaving no budget pressure for the surrogate to exploit. Surrogate warmup and retraining overhead make it 240× slower for identical solution quality.
 
 **Best mission:**
 
@@ -264,49 +260,47 @@ This is the expected behaviour: surrogate pre-screening is only beneficial when 
 
 ---
 
-### Cassini1 — EVVEJS (5 runs × 30,000 evaluations)
+### Cassini1 — EVVEJS (10 runs × 150,000 evaluations)
 
 | Metric | DE | Surrogate-DE |
 |--------|-----|--------------|
-| Best Δv | 9.419 km/s | 9.422 km/s |
-| Mean Δv | 9.419 km/s | 13.641 km/s |
-| Median Δv | 9.419 km/s | 14.219 km/s |
-| Worst Δv | 9.419 km/s | 20.189 km/s |
-| Std | 0.000 | 4.001 |
-| Avg time | 27.75 s | 238.10 s |
+| Best Δv | 9.419 km/s | 9.419 km/s |
+| Mean Δv | 9.711 km/s | 11.669 km/s |
+| Median Δv | 9.419 km/s | 9.426 km/s |
+| Worst Δv | 12.337 km/s | 20.188 km/s |
+| Std | 0.875 | 3.356 |
+| Avg time | 48.04 s | 608.50 s |
 | Reference (MGA-1DSM) | 4.930 km/s | — |
 
 **Best mission:**
 
 | Leg | Transfer time | Arrival |
 |-----|--------------|---------|
-| Earth → Venus | 180 d | 1998-05-17 |
+| Earth → Venus | 180 d | 1998-05-18 |
 | Venus → Venus | 415 d | 1999-07-06 |
 | Venus → Earth | 53 d | 1999-08-28 |
 | Earth → Jupiter | 1,057 d | 2002-07-20 |
 | Jupiter → Saturn | 4,634 d | 2015-03-28 |
 
 - **Departure:** 1997-11-18 — within 34 days of the real Cassini launch (1997-10-15), confirming correct problem geometry
-- **Duration:** 6,339 days (17.35 years)
+- **Duration:** 6,339 days (17.36 years)
 - **Total Δv:** 9.419 km/s
 
 #### Why the result differs from the 4.930 km/s reference
 
 Two independent reasons account for the gap:
 
-**Formulation difference.** This implementation uses unpowered MGA only — no deep-space impulses within transfer legs. The ESA GTOP best-known solution uses the MGA-1DSM formulation, which allows one deep-space impulse per leg. The search space here is strictly smaller, so the achievable minimum is higher by construction. This is a deliberate scope choice to keep the fitness function physically transparent.
+**Formulation difference.** This implementation uses unpowered MGA only — no deep-space impulses within transfer legs. The ESA GTOP best-known solution uses the MGA-1DSM formulation, which allows one deep-space impulse per leg. The search space here is strictly smaller, so the achievable minimum is higher by construction.
 
-**Insufficient evaluation budget.** The Cassini1 landscape is highly multimodal in 6 dimensions. The literature reports that competitive MGA solutions typically require 100,000–300,000 fitness evaluations with population sizes of 100–200. At 30,000 evaluations with population 60, DE converges to a local optimum at 9.419 km/s with zero variance across all 5 runs — identical results indicate the search has stalled in one basin rather than explored the landscape. Increasing the budget to 150,000+ evaluations with a larger population is the primary path to improvement within the current formulation.
+**Population size is the binding constraint, not budget.** At 150,000 evaluations with population 60, DE converges and triggers its termination criterion at 39,000–65,000 evaluations — well before the budget is exhausted. All 10 runs either stagnate at 9.419 km/s or find a different local basin (12.337 km/s in run 7, std=0.875). More budget does not help because DE has already stagnated; the fix is a larger population (150–200) that maintains diversity long enough to explore the multimodal landscape. This is the primary path to improvement within the current formulation.
 
 #### Why the surrogate hurts on Cassini1
 
-The surrogate-assisted DE degrades performance significantly: mean Δv increases by 44.8% and standard deviation rises from 0.000 to 4.001 km/s. This is a known failure mode of surrogate-assisted optimization on highly multimodal landscapes.
+The surrogate-assisted DE performs significantly worse: mean Δv increases by 20.2% and std rises from 0.875 to 3.356 km/s. The MLP learns a smooth approximation of a jagged fitness surface and its pre-screening systematically filters out candidates in unexplored basins. The result is reduced population diversity and premature stagnation. High variance across runs (9.419 to 20.188 km/s) confirms the surrogate is actively destabilizing the search.
 
-The MLP learns a smooth approximation of a jagged fitness surface. Pre-screening on this approximation systematically filters out candidates in unexplored basins that appear unpromising to the surrogate but are in fact paths to better optima. The result is reduced diversity and premature convergence — the opposite of the intended effect. High variance across runs (9.422 to 20.189 km/s) confirms the surrogate is actively destabilizing the search rather than guiding it.
+Notably, increasing the budget from 30,000 to 150,000 evaluations improves the surrogate mean from 13.641 to 11.669 km/s — more observations help the MLP learn a better landscape approximation — but it remains worse than plain DE at any budget tested. The surrogate is demonstrably useful only when the landscape is smooth enough for an MLP to learn useful fitness ordering. Cassini1 does not satisfy this condition at population 60.
 
-The contrast with Earth-Mars is informative: the surrogate achieves rank correlation ρ = 0.996 on the quadratic test function, confirming it can learn smooth landscapes. The failure is specific to multimodal problems at insufficient budget, where the surrogate has not seen enough of the landscape to distinguish good basins from bad ones.
-
-**Planned improvement:** an adaptive fallback that monitors surrogate rank correlation on held-out data during the run and disables pre-screening when ρ drops below a threshold, reverting to plain DE evaluation for that generation.
+**Planned improvement:** an adaptive fallback that monitors held-out rank correlation during the run and reverts to plain DE evaluation when ρ drops below a threshold, combined with population sizes of 150–200 for improved landscape coverage.
 
 ---
 
@@ -379,26 +373,26 @@ The fitness function uses the patched-conics approximation with an unpowered-fly
 |---------|-----------|--------|------------|---------------------|
 | Earth → Mars | 2 | 5,000 | 0.18 s | 43.62 s |
 | EVEJ | 4 | 15,000 | ~2 min | ~8 min |
-| Cassini1 | 6 | 30,000 | 27.75 s | 238.10 s |
+| Cassini1 | 6 | 150,000 | 48.04 s | 608.50 s |
 
-Measured on a single CPU core. The computation is embarrassingly parallel but parallelisation is not implemented — each Lambert solve is fast enough that thread dispatch overhead does not pay off at this scale.
+Measured on a single CPU core (Apple M1). DE terminates early on Cassini1 at 39,000–65,000 evaluations when the convergence tolerance is met — the 150,000 budget is not fully consumed. The computation is embarrassingly parallel but parallelisation is not implemented.
 
 ---
 
 ## Known Limitations
 
-- **Unpowered MGA only.** Deep-space maneuvers within transfer legs are not modelled, so Cassini1 results will not match the MGA-1DSM reference of 4.930 km/s. This is a deliberate scope choice.
-- **Insufficient budget for Cassini1.** Competitive solutions require 100,000–300,000 evaluations. At 30,000 the optimizer stalls in a local basin at 9.419 km/s.
-- **Surrogate degrades on multimodal problems.** Pre-screening is beneficial only when the landscape is smooth enough for the MLP to learn useful fitness ordering. On Cassini1 at this budget, the surrogate actively harms convergence. An adaptive fallback based on held-out rank correlation is the planned fix.
-- **Default DE parameters only.** Self-adaptive variants (jDE, SHADE, L-SHADE) are not implemented. F and CR are fixed.
+- **Unpowered MGA only.** No deep-space maneuvers within transfer legs; Cassini1 results will not match the MGA-1DSM reference of 4.930 km/s.
+- **Population size is the binding constraint on Cassini1.** At pop=60 DE stagnates at 40,000–65,000 evaluations regardless of budget. Population 150–200 is the recommended fix, not a larger budget.
+- **Surrogate degrades on multimodal problems.** Pre-screening is beneficial only when the landscape is smooth enough for the MLP to learn useful fitness ordering. On Cassini1 at pop=60, the surrogate actively harms convergence. An adaptive rank-correlation fallback is the planned fix.
+- **Default DE parameters only.** Self-adaptive variants (jDE, SHADE, L-SHADE) are not implemented.
 - **No launch C3 filtering.** All departure Δv values are reported regardless of launch vehicle capability.
-- **Single-objective.** The optimizer minimizes total Δv only. Pareto frontiers over Δv vs flight time are not supported.
+- **Single-objective.** Pareto frontiers over Δv vs flight time are not supported.
 
 ---
 
 ## Future Work
 
-- Increase evaluation budget to 150,000+ for Cassini1 with population 100–200
+- Increase population to 150–200 for Cassini1 to maintain diversity and escape local basins
 - Implement MGA-1DSM formulation (one deep-space impulse per leg) to match ESA reference
 - Adaptive surrogate fallback: disable pre-screening when held-out rank correlation drops below threshold
 - Self-adaptive DE variants (jDE, SHADE) for improved convergence on high-dimensional problems
