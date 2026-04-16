@@ -57,6 +57,11 @@ R_MIN_FLYBY = {
 JD_MJD2000_OFFSET = 2451544.5
 
 
+def calendar_to_jd_from_mjd2000(mjd2000):
+    """Convert MJD2000 (days since J2000.0) to Julian Date."""
+    return mjd2000 + 2451545.0
+
+
 def mjd2000_to_jd(mjd: float) -> float:
     """Modified Julian Date 2000 → Julian Date."""
     return mjd + JD_MJD2000_OFFSET
@@ -259,4 +264,177 @@ def decode_mission(x: np.ndarray, sequence: List[str]) -> dict:
             for i in range(len(sequence) - 1)
         ],
         "total_dv": mga_fitness(x, sequence),
+    }
+
+
+# ============================================================
+# MGA-1DSM: one deep-space maneuver per transfer leg
+# ============================================================
+
+from kepler import propagate as keplerian_propagate
+
+CASSINI1_1DSM_SEQUENCE = ['earth', 'venus', 'venus', 'earth', 'jupiter', 'saturn']
+
+CASSINI1_1DSM_BOUNDS = np.array([
+    [-1000.0,  300.0],   # t0: departure date MJD2000
+    [   30.0,  400.0],   # T1: leg 1 duration (days)
+    [    0.01,  0.99],   # eta1
+    [  100.0,  470.0],   # T2
+    [    0.01,  0.99],   # eta2
+    [   30.0,  400.0],   # T3
+    [    0.01,  0.99],   # eta3
+    [  400.0, 2000.0],   # T4
+    [    0.01,  0.99],   # eta4
+    [ 1000.0, 6000.0],   # T5
+    [    0.01,  0.99],   # eta5
+])
+
+CASSINI1_1DSM_REFERENCE_DV = 4.93  # km/s, best known MGA-1DSM
+
+
+def _mjd2000_to_datestr(mjd2000):
+    """Convert MJD2000 to YYYY-MM-DD string."""
+    y, m, d = jd_to_calendar(mjd2000_to_jd(mjd2000))
+    return f"{y:04d}-{m:02d}-{int(d):02d}"
+
+
+def cassini1_1dsm_fitness(x, sequence=None):
+    """
+    MGA-1DSM fitness for the Cassini1 EVVEJS sequence.
+
+    Each transfer leg is split into two Lambert arcs by a single
+    deep-space maneuver (DSM). The DSM position is found by propagating
+    the spacecraft from the departure planet under Keplerian two-body
+    dynamics for time eta * T_leg. The DSM delta-v closes the gap
+    between the two arcs.
+
+    Decision vector:
+        x = [t0, T1, eta1, T2, eta2, T3, eta3, T4, eta4, T5, eta5]
+
+    Returns total delta-v in km/s, or 1e6 if any leg is infeasible.
+    """
+    if sequence is None:
+        sequence = CASSINI1_1DSM_SEQUENCE
+
+    n_legs = len(sequence) - 1
+
+    t0 = x[0]
+    legs = [(x[1 + 2*i], x[2 + 2*i]) for i in range(n_legs)]
+
+    # Epochs at each planetary encounter (MJD2000)
+    epochs = [t0]
+    for T, _eta in legs:
+        epochs.append(epochs[-1] + T)
+
+    # Planetary states at each encounter
+    try:
+        states = [state_vector(planet, calendar_to_jd_from_mjd2000(ep))
+                  for planet, ep in zip(sequence, epochs)]
+    except Exception:
+        return 1e6
+
+    total_dv = 0.0
+
+    for leg_idx in range(n_legs):
+        T_days, eta = legs[leg_idx]
+        T_sec  = T_days * DAY_S
+        T1_sec = eta * T_sec
+        T2_sec = (1.0 - eta) * T_sec
+
+        r_dep, v_dep_planet = states[leg_idx]
+        r_arr, v_arr_planet = states[leg_idx + 1]
+
+        # Arc 1: solve Lambert over full leg to get departure velocity,
+        # then propagate to DSM point
+        try:
+            sols_full = lambert_solve(r_dep, r_arr, T_sec, MU_SUN,
+                                      prograde=True)
+        except Exception:
+            return 1e6
+        if not sols_full:
+            return 1e6
+
+        v_sc_dep, _ = sols_full[0]
+
+        # Launch delta-v at origin planet (first leg only)
+        if leg_idx == 0:
+            total_dv += norm(v_sc_dep - v_dep_planet)
+
+        # Propagate to DSM point
+        try:
+            r_dsm, v_before_dsm = keplerian_propagate(r_dep, v_sc_dep,
+                                                       T1_sec, MU_SUN)
+        except RuntimeError:
+            return 1e6
+
+        # Arc 2: DSM point to arrival planet
+        try:
+            sols_arc2 = lambert_solve(r_dsm, r_arr, T2_sec, MU_SUN,
+                                      prograde=True)
+        except Exception:
+            return 1e6
+        if not sols_arc2:
+            return 1e6
+
+        v_after_dsm, v_sc_arr = sols_arc2[0]
+
+        # DSM cost
+        total_dv += norm(v_after_dsm - v_before_dsm)
+
+        if leg_idx < n_legs - 1:
+            # Intermediate flyby — same model as unpowered MGA
+            v_inf_in = v_sc_arr - v_arr_planet
+
+            r_next, v_next_planet = states[leg_idx + 2]
+            T_next_sec = legs[leg_idx + 1][0] * DAY_S
+            try:
+                sols_next = lambert_solve(r_arr, r_next, T_next_sec,
+                                          MU_SUN, prograde=True)
+            except Exception:
+                return 1e6
+            if not sols_next:
+                return 1e6
+
+            v_sc_dep_next, _ = sols_next[0]
+            v_inf_out = v_sc_dep_next - v_arr_planet
+
+            planet = sequence[leg_idx + 1]
+            total_dv += _flyby_cost(v_inf_in, v_inf_out,
+                                    MU_PLANET[planet], R_MIN_FLYBY[planet])
+        else:
+            # Final arrival delta-v
+            total_dv += norm(v_sc_arr - v_arr_planet)
+
+    return float(total_dv)
+
+
+def decode_1dsm_mission(x, sequence=None):
+    """Decode a 1DSM decision vector into a human-readable mission summary."""
+    if sequence is None:
+        sequence = CASSINI1_1DSM_SEQUENCE
+
+    n_legs = len(sequence) - 1
+    t0 = x[0]
+    legs = [(x[1 + 2*i], x[2 + 2*i]) for i in range(n_legs)]
+
+    epochs = [t0]
+    for T, _eta in legs:
+        epochs.append(epochs[-1] + T)
+
+    return {
+        'total_dv': cassini1_1dsm_fitness(x, sequence),
+        'departure': _mjd2000_to_datestr(t0),
+        'arrival':   _mjd2000_to_datestr(epochs[-1]),
+        'total_days':  float(sum(T for T, _ in legs)),
+        'total_years': float(sum(T for T, _ in legs)) / 365.25,
+        'legs': [
+            {
+                'from':    sequence[i],
+                'to':      sequence[i + 1],
+                'days':    legs[i][0],
+                'eta_dsm': legs[i][1],
+                'arrival': _mjd2000_to_datestr(epochs[i + 1]),
+            }
+            for i in range(n_legs)
+        ],
     }

@@ -3,13 +3,14 @@
 GTOP DE + Surrogate Benchmark Runner
 
 Usage:
-    python main.py                              # Earth→Mars (fast default)
-    python main.py --problem cassini1           # Cassini1 (slow, 6D)
-    python main.py --problem evej               # Earth-Venus-Earth-Jupiter
-    python main.py --validate                   # run validation suite
-    python main.py --runs 10 --budget 30000     # custom settings
-    python main.py --de-only                    # skip surrogate
-    python main.py --surrogate-only             # skip plain DE
+    python main.py                                  # Earth→Mars (fast default)
+    python main.py --problem cassini1               # Cassini1 unpowered (6D)
+    python main.py --problem cassini1-1dsm          # Cassini1 MGA-1DSM (11D)
+    python main.py --problem evej                   # Earth-Venus-Earth-Jupiter
+    python main.py --validate                       # run validation suite
+    python main.py --runs 10 --budget 150000        # custom settings
+    python main.py --de-only                        # skip surrogate
+    python main.py --surrogate-only                 # skip plain DE
 """
 
 from __future__ import annotations
@@ -73,16 +74,25 @@ def main():
         run_all()
         return
 
-    # Defaults depend on problem size
+    # Defaults depend on problem
     prob = PROBLEMS[args.problem]
     D = prob["bounds"].shape[0]
     default_budgets = {
-        "earth-mars": 3000,
-        "evej":       15000,
-        "cassini1":   30000,
+        "earth-mars":    3000,
+        "evej":          15000,
+        "cassini1":      150000,
+        "cassini1-1dsm": 200000,
     }
-    budget = args.budget or default_budgets.get(args.problem, 10000)
-    pop_size = args.pop or max(20, 10 * D)
+    # Default population: 10×D, but floor at 20
+    # For 1DSM the 11D landscape warrants a larger population
+    default_pops = {
+        "earth-mars":    max(20, 10 * D),
+        "evej":          max(40, 10 * D),
+        "cassini1":      max(60, 10 * D),
+        "cassini1-1dsm": max(110, 10 * D),
+    }
+    budget   = args.budget   or default_budgets.get(args.problem, 10000)
+    pop_size = args.pop      or default_pops.get(args.problem, max(20, 10 * D))
 
     print(f"\n{'='*64}")
     print(f"  GTOP-DE-SURROGATE BENCHMARK")
@@ -95,7 +105,7 @@ def main():
     if prob['reference'] is not None:
         print(f"  Reference:    {prob['reference']:.3f} km/s (best known)")
 
-    de_stats = None
+    de_stats   = None
     surr_stats = None
 
     if not args.surrogate_only:
@@ -118,7 +128,7 @@ def main():
             verbose=args.verbose,
         )
 
-    # Results
+    # Print results
     if de_stats is not None and surr_stats is not None:
         print_comparison(de_stats, surr_stats)
         best_stats = de_stats if de_stats["best"] < surr_stats["best"] else surr_stats

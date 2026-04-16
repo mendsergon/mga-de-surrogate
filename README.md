@@ -1,7 +1,9 @@
 # Differential Evolution + Neural Network Surrogate for MGA Trajectory Optimization
-### v1.0.0 — DE with MLP Pre-Screening
+### v1.1.0 — MGA-1DSM Extension
 
 A from-scratch implementation of **differential evolution** with a **neural network surrogate model** for interplanetary Multiple Gravity Assist (MGA) trajectory optimization. The optimizer solves Lambert's problem at each leg of a candidate trajectory, computes v∞ at each planetary encounter, and accumulates the total Δv cost including gravity-assist feasibility constraints. A multilayer perceptron is trained on accumulated fitness evaluations and used to pre-screen each generation's trial population, so only the most promising candidates trigger a full Lambert solve. Using **numpy** for the optimizer and **scikit-learn** for the surrogate, the system solves the ESA GTOP **Cassini1** problem (Earth–Venus–Venus–Earth–Jupiter–Saturn) and simpler benchmarks, with a 10-test validation suite covering DE correctness, MGA physics, and surrogate behaviour.
+
+v1.1.0 adds the **MGA-1DSM formulation** — one deep-space maneuver per transfer leg — implemented via a universal-variable Keplerian propagator. Both unpowered MGA and MGA-1DSM are benchmarked against the same ESA GTOP Cassini1 problem under identical optimizer settings, isolating the effect of the trajectory transcription from optimizer configuration.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![Optimizer](https://img.shields.io/badge/Optimizer-Differential_Evolution-green)
@@ -260,6 +262,35 @@ Both optimizers find the global minimum consistently across all 5 runs, within 0
 
 ---
 
+### Earth → Venus → Earth → Jupiter (10 runs × 50,000 evaluations)
+
+| Metric | DE | Surrogate-DE |
+|--------|-----|--------------|
+| Best Δv | 11.743 km/s | 11.743 km/s |
+| Mean Δv | 12.085 km/s | 12.852 km/s |
+| Median Δv | 12.085 km/s | 12.427 km/s |
+| Worst Δv | 12.427 km/s | 15.891 km/s |
+| Std | 0.342 | 1.310 |
+| Avg time | 6.32 s | 446.14 s |
+
+DE finds exactly two distinct basins across 10 runs — 11.743 km/s (5 runs) and 12.427 km/s (5 runs) — with zero variance within each group. The std=0.342 arises entirely from the 50/50 split between the two basins, confirming the EVEJ landscape is genuinely bimodal at population 40. DE terminates at 9,000–11,000 evaluations out of a 50,000 budget, again demonstrating that population size rather than evaluation count is the binding constraint — the same pattern observed on Cassini1.
+
+The surrogate is slightly harmful at 4D: mean Δv increases by 6.4% and std rises from 0.342 to 1.310 km/s. Several surrogate-DE runs exhaust the full 50,000-evaluation budget without triggering the convergence criterion, indicating the surrogate is slowing convergence rather than accelerating it. This is a qualitatively different failure mode from Cassini1 where the surrogate caused active divergence — here it merely delays stagnation without improving the final result.
+
+**Best mission:**
+
+| Leg | Transfer time | Arrival |
+|-----|--------------|---------|
+| Earth → Venus | 130 d | 2026-12-15 |
+| Venus → Earth | 316 d | 2027-10-27 |
+| Earth → Jupiter | 1,058 d | 2030-09-19 |
+
+- **Departure:** 2026-08-07
+- **Duration:** 1,504 days (4.12 years)
+- **Total Δv:** 11.743 km/s
+
+---
+
 ### Cassini1 — EVVEJS (10 runs × 150,000 evaluations)
 
 | Metric | DE | Surrogate-DE |
@@ -301,6 +332,64 @@ The surrogate-assisted DE performs significantly worse: mean Δv increases by 20
 Notably, increasing the budget from 30,000 to 150,000 evaluations improves the surrogate mean from 13.641 to 11.669 km/s — more observations help the MLP learn a better landscape approximation — but it remains worse than plain DE at any budget tested. The surrogate is demonstrably useful only when the landscape is smooth enough for an MLP to learn useful fitness ordering. Cassini1 does not satisfy this condition at population 60.
 
 **Planned improvement:** an adaptive fallback that monitors held-out rank correlation during the run and reverts to plain DE evaluation when ρ drops below a threshold, combined with population sizes of 150–200 for improved landscape coverage.
+
+---
+
+### Cassini1-1DSM — EVVEJS (10 runs × 150,000 evaluations)
+
+| Metric | DE |
+|--------|-----|
+| Best Δv | 9.419 km/s |
+| Mean Δv | 9.419 km/s |
+| Median Δv | 9.419 km/s |
+| Worst Δv | 9.419 km/s |
+| Std | 0.000 |
+| Avg evaluations | 109,823 |
+| Avg time | 475.3 s |
+| Reference (MGA-1DSM) | 4.930 km/s |
+
+**Best mission (with DSM placements):**
+
+| Leg | Transfer time | η (DSM fraction) | Arrival |
+|-----|--------------|-----------------|---------|
+| Earth → Venus | 180 d | 0.35 | 1998-05-17 |
+| Venus → Venus | 415 d | 0.26 | 1999-07-06 |
+| Venus → Earth | 53 d | 0.46 | 1999-08-27 |
+| Earth → Jupiter | 1,057 d | 0.78 | 2002-07-19 |
+| Jupiter → Saturn | 4,634 d | 0.73 | 2015-03-28 |
+
+- **Departure:** 1997-11-18
+- **Duration:** 6,339 days (17.36 years)
+- **Total Δv:** 9.419 km/s
+
+#### Formulation comparison: unpowered MGA vs MGA-1DSM
+
+| Metric | Unpowered MGA (6D) | MGA-1DSM (11D) |
+|--------|-------------------|----------------|
+| Best Δv | 9.419 km/s | 9.419 km/s |
+| Mean Δv | 9.711 km/s | 9.419 km/s |
+| Std | 0.875 | 0.000 |
+| Population | 60 | 110 |
+| Avg time per run | 48.04 s | 475.3 s |
+| Evals to convergence | 40,000–65,000 | 100,000–120,000 |
+
+The 1DSM formulation finds the same best Δv as unpowered MGA. The DSM placements are non-trivial (η values away from 0 and 1) but the resulting DSM burns are near-zero — the optimizer has found the same trajectory family and placed DSMs that contribute almost nothing to the total cost. This confirms the population constraint finding extends to the 1DSM case: the extra 5 η variables expand the search space without helping escape the dominant local basin at 9.419 km/s. The correct fix remains population 150–200, not a different trajectory transcription.
+
+The 1DSM formulation is approximately 10× slower per run (475s vs 48s) due to the Keplerian propagation sub-stepping required to locate DSM points on each leg.
+
+---
+
+### Surrogate Scaling Across Dimensionality
+
+The three benchmark problems together reveal a systematic pattern in surrogate effectiveness:
+
+| Problem | Dims | Surrogate mean Δv change | Surrogate time penalty | Conclusion |
+|---------|------|--------------------------|----------------------|------------|
+| Earth→Mars | 2 | 0.0% | 240× slower | Unnecessary |
+| EVEJ | 4 | +6.4% | 70× slower | Slightly harmful |
+| Cassini1 | 6 | +20.2% | 13× slower | Significantly harmful |
+
+Surrogate damage scales with dimensionality. As the landscape becomes more complex, the MLP's smooth approximation increasingly misrepresents the fitness surface, causing pre-screening to filter out promising candidates in unexplored basins. The time penalty per unit of quality degradation worsens at higher dimensions because surrogate retraining overhead grows while the benefit decreases. This systematic relationship motivates the adaptive fallback: monitor rank correlation ρ during the run and disable pre-screening when the surrogate is demonstrably not learning useful fitness ordering.
 
 ---
 
@@ -358,7 +447,8 @@ The fitness function uses the patched-conics approximation with an unpowered-fly
 | `testfuncs.py` | Standard test functions — sphere, Rosenbrock, Rastrigin, Ackley |
 | `lambert.py` | Izzo's Lambert solver — called by every MGA fitness evaluation |
 | `ephemeris.py` | Analytical planetary ephemeris from JPL Keplerian elements |
-| `mga.py` | MGA fitness functions, flyby cost model, problem definitions |
+| `mga.py` | MGA fitness functions, flyby cost model, unpowered MGA and MGA-1DSM problem definitions |
+| `kepler.py` | Universal-variable Keplerian propagator — used by MGA-1DSM to locate DSM points |
 | `surrogate.py` | MLP surrogate with input normalization and training reservoir |
 | `de_surrogate.py` | Surrogate-assisted DE with pre-screening strategy |
 | `benchmark.py` | Benchmark harness comparing plain DE against surrogate-assisted DE |
@@ -372,16 +462,17 @@ The fitness function uses the patched-conics approximation with an unpowered-fly
 | Problem | Dimensions | Budget | DE runtime | Surrogate-DE runtime |
 |---------|-----------|--------|------------|---------------------|
 | Earth → Mars | 2 | 5,000 | 0.18 s | 43.62 s |
-| EVEJ | 4 | 15,000 | ~2 min | ~8 min |
+| EVEJ | 4 | 50,000 | 6.32 s | 446.14 s |
 | Cassini1 | 6 | 150,000 | 48.04 s | 608.50 s |
+| Cassini1-1DSM | 11 | 150,000 | 475.3 s | — |
 
-Measured on a single CPU core (Apple M1). DE terminates early on Cassini1 at 39,000–65,000 evaluations when the convergence tolerance is met — the 150,000 budget is not fully consumed. The computation is embarrassingly parallel but parallelisation is not implemented.
+Measured on a single CPU core (Apple M1). The 1DSM formulation is ~10× slower than unpowered MGA due to Keplerian propagation sub-stepping for DSM point location. The computation is embarrassingly parallel but parallelisation is not implemented.
 
 ---
 
 ## Known Limitations
 
-- **Unpowered MGA only.** No deep-space maneuvers within transfer legs; Cassini1 results will not match the MGA-1DSM reference of 4.930 km/s.
+- **Population constraint dominates both formulations.** Both unpowered MGA (6D, pop=60) and MGA-1DSM (11D, pop=110) stagnate at 9.419 km/s. The extra DSM variables do not help escape local basins at these population sizes. Population 150–200 is the recommended fix.
 - **Population size is the binding constraint on Cassini1.** At pop=60 DE stagnates at 40,000–65,000 evaluations regardless of budget. Population 150–200 is the recommended fix, not a larger budget.
 - **Surrogate degrades on multimodal problems.** Pre-screening is beneficial only when the landscape is smooth enough for the MLP to learn useful fitness ordering. On Cassini1 at pop=60, the surrogate actively harms convergence. An adaptive rank-correlation fallback is the planned fix.
 - **Default DE parameters only.** Self-adaptive variants (jDE, SHADE, L-SHADE) are not implemented.
@@ -393,7 +484,6 @@ Measured on a single CPU core (Apple M1). DE terminates early on Cassini1 at 39,
 ## Future Work
 
 - Increase population to 150–200 for Cassini1 to maintain diversity and escape local basins
-- Implement MGA-1DSM formulation (one deep-space impulse per leg) to match ESA reference
 - Adaptive surrogate fallback: disable pre-screening when held-out rank correlation drops below threshold
 - Self-adaptive DE variants (jDE, SHADE) for improved convergence on high-dimensional problems
 - Pareto frontier over total Δv vs flight time

@@ -21,7 +21,9 @@ from mga import (
     evej_fitness, EVEJ_BOUNDS, EVEJ_SEQUENCE,
     cassini1_fitness, CASSINI1_BOUNDS, CASSINI1_SEQUENCE,
     CASSINI1_REFERENCE_DV,
-    decode_mission,
+    cassini1_1dsm_fitness, CASSINI1_1DSM_BOUNDS, CASSINI1_1DSM_SEQUENCE,
+    CASSINI1_1DSM_REFERENCE_DV,
+    decode_mission, decode_1dsm_mission,
 )
 
 
@@ -34,6 +36,7 @@ PROBLEMS = {
         "sequence": ["earth", "mars"],
         "name":     "Earth → Mars direct",
         "reference": 5.61,
+        "decoder":  decode_mission,
     },
     "evej": {
         "fitness":  evej_fitness,
@@ -41,6 +44,7 @@ PROBLEMS = {
         "sequence": EVEJ_SEQUENCE,
         "name":     "Earth → Venus → Earth → Jupiter",
         "reference": None,
+        "decoder":  decode_mission,
     },
     "cassini1": {
         "fitness":  cassini1_fitness,
@@ -48,6 +52,15 @@ PROBLEMS = {
         "sequence": CASSINI1_SEQUENCE,
         "name":     "Cassini1 (EVVEJS)",
         "reference": CASSINI1_REFERENCE_DV,
+        "decoder":  decode_mission,
+    },
+    "cassini1-1dsm": {
+        "fitness":  cassini1_1dsm_fitness,
+        "bounds":   CASSINI1_1DSM_BOUNDS,
+        "sequence": CASSINI1_1DSM_SEQUENCE,
+        "name":     "Cassini1-1DSM (EVVEJS)",
+        "reference": CASSINI1_1DSM_REFERENCE_DV,
+        "decoder":  decode_1dsm_mission,
     },
 }
 
@@ -135,6 +148,7 @@ def run_benchmark(
         "histories":   histories,
         "sequence":    prob["sequence"],
         "reference":   prob["reference"],
+        "decoder":     prob["decoder"],
     }
 
 
@@ -160,7 +174,6 @@ def print_comparison(de_stats: Dict, surr_stats: Dict) -> None:
     print(f"  {'avg time (s)':<22} {de_stats['avg_time_s']:>13.2f}   "
           f"{surr_stats['avg_time_s']:>16.2f}")
 
-    # Acceleration metric
     if surr_stats["mean"] > 0:
         improvement = (de_stats["mean"] - surr_stats["mean"]) / de_stats["mean"]
         print(f"\n  Mean Δv improvement (surrogate vs plain): {improvement*100:+.1f}%")
@@ -173,15 +186,19 @@ def print_mission(stats: Dict) -> None:
     if stats["best_x"] is None:
         return
 
-    info = decode_mission(np.array(stats["best_x"]), stats["sequence"])
+    decoder = stats.get("decoder", decode_mission)
+    info = decoder(np.array(stats["best_x"]), stats["sequence"])
+
     print(f"\n  Best mission found:")
     print(f"    Departure: {info['departure']}")
     print(f"    Arrival:   {info['arrival']}")
     print(f"    Duration:  {info['total_days']:.0f} days "
           f"({info['total_years']:.2f} years)")
     print(f"    Total Δv:  {info['total_dv']:.3f} km/s")
-    if len(info['legs']) > 1:
+    if info.get('legs') and len(info['legs']) > 1:
         print(f"    Legs:")
         for leg in info["legs"]:
+            eta_str = f"  η={leg['eta_dsm']:.2f}" if 'eta_dsm' in leg else ""
+            tof = leg.get('tof_days') or leg.get('days', 0)
             print(f"      {leg['from']:8s} → {leg['to']:8s}  "
-                  f"{leg['tof_days']:6.0f} d  (arr {leg['arrival_date']})")
+                  f"{tof:6.0f} d{eta_str}  (arr {leg['arrival_date'] if 'arrival_date' in leg else leg.get('arrival','')})")
